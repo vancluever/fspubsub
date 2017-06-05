@@ -46,7 +46,7 @@ if err != nil {
 }
 ```
 
-To listen for events on the stream, create a new subscriber, and the call
+To listen for events on the stream, create a new subscriber, and then call
 `Subscribe`. This will start to send events through the respective channel.
 
 ```
