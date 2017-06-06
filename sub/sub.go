@@ -148,6 +148,26 @@ done:
 	return nil
 }
 
+// SubscribeCallback is a helper that provides a very simple event loop around
+// Subscribe. Events are passed to the callback function supplied by cb, with
+// the ID and data.
+//
+// This function does not take responsbility for handling event processing
+// errors. It's up to the callback to hand errors as it sees fit.
+func (s *Subscriber) SubscribeCallback(cb func(string, interface{})) error {
+	go func() {
+		for {
+			select {
+			case event := <-s.Queue:
+				cb(event.ID, event.Data)
+			case <-s.Done:
+				return
+			}
+		}
+	}()
+	return s.Subscribe()
+}
+
 // Close signals to Subscribe that we are done and that the subscription is no
 // longer needed. This initiates shutdown in Subscribe and will make it return
 // without error, as long as there is none.
