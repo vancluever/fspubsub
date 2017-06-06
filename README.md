@@ -72,6 +72,22 @@ if err := s.Subscribe(); err != nil {
 `Subscribe` blocks until there is an error in the stream or the subscription is
 shut down with `Close`.
 
+If all you need in your event loop is this basic setup, you can also use
+`SubscribeCallback`:
+
+```
+s, err := sub.NewSubscriber(wd, TestEvent{})
+if err != nil {
+  log.Fatalf("[FATAL] Cannot create subscriber: %s", err)
+}
+cb := func(id string, data interface{}) {
+      log.Printf("[INFO] Event %s received: %#v", id, data)
+}
+if err := s.SubscribeCallback(cb); err != nil {
+  log.Fatalf("[FATAL] Error listening to events: %s", err)
+}
+```
+
 For full details, see the [GoDoc](https://godoc.org/github.com/vancluever/fspubsub).
 
 ## License
