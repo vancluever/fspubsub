@@ -153,7 +153,7 @@ done:
 // the ID and data.
 //
 // This function does not take responsbility for handling event processing
-// errors. It's up to the callback to hand errors as it sees fit.
+// errors. It's up to the callback to handle errors as it sees fit.
 func (s *Subscriber) SubscribeCallback(cb func(string, interface{})) error {
 	go func() {
 		for {
