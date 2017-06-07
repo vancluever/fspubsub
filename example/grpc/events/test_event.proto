@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package events;
+
+service EventSubscriber {
+  rpc Subscribe(stream Params) returns (stream TestEvent) {}
+}
+
+message Params {}
+
+message TestEvent {
+  string Text = 1;
+}
