@@ -10,7 +10,7 @@ import (
 	"github.com/gopherjs/vecty/elem"
 	"github.com/gopherjs/vecty/event"
 	"github.com/gopherjs/websocket"
-	"github.com/vancluever/fspubsub/example/grpc/events"
+	"github.com/vancluever/fspubsub/example/gopherjs-websocket/events"
 )
 
 // displayLines indicates the lines to display. The last amount of lines equal
