@@ -71,11 +71,11 @@ func (p eventSlice) Swap(i, j int) {
 // denoted as i should be a receiver. A trivial example is below:
 //
 //   type E struct {
-//		Index string
+//     Index string
 //   }
 //
 //   func (i E) Less(j interface{}) bool {
-//		return i.Index < j.(E).Index
+//     return i.Index < j.(E).Index
 //   }
 //
 type IndexedEvent interface {
