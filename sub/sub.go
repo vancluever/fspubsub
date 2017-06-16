@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"sync"
 
 	"github.com/rjeczalik/notify"
@@ -33,6 +34,52 @@ type Event struct {
 
 	// The event data.
 	Data interface{}
+}
+
+// eventSlice represents multiple events and implements sort.Interface so that
+// the slice can be sorted by the event struct's implementation of
+// IndexedEvent, if it exists. Data sorted by this function gets returned as
+// just the generic event slice.
+type eventSlice []Event
+
+// Len returns the length of the slice, and helps implement sort.Interface.
+func (p eventSlice) Len() int {
+	return len(p)
+}
+
+// Less takes the value at the index of j, and passes it to the Less method
+// of the event data at the index of i. The function panics if p[j] does not
+// implement IndexedEvent.
+func (p eventSlice) Less(i, j int) bool {
+	v, ok := p[i].Data.(IndexedEvent)
+	if !ok {
+		panic(fmt.Errorf("Event at index %d with type %T does not implement sub.IndexedEvent", i, p[i]))
+	}
+	return v.Less(p[j].Data)
+}
+
+// Swap does a simple swap of i and j, implementing sort.Interface.
+func (p eventSlice) Swap(i, j int) {
+	p[i], p[j] = p[j], p[i]
+}
+
+// IndexedEvent is an interface that implements an event with an index.
+//
+// The index, whatever is chosen in the event, should be able to be sorted with
+// a Less method. This method is similar in purpose to the Less method in the
+// standard library sort package, however, the lower index value commonly
+// denoted as i should be a receiver. A trivial example is below:
+//
+//   type E struct {
+//		Index string
+//   }
+//
+//   func (i E) Less(j interface{}) bool {
+//		return i.Index < j.(E).Index
+//   }
+//
+type IndexedEvent interface {
+	Less(j interface{}) bool
 }
 
 // Subscriber is a simple event subscriber, designed to read events from the
@@ -207,6 +254,29 @@ func (s *Subscriber) Dump() ([]Event, error) {
 			Data: d.Elem().Interface(),
 		})
 	}
+	return es, nil
+}
+
+// DumpSorted dumps all of the events, and then sorts them according to the
+// criteria defined by the event type's IndexedEvent interface. The function
+// will panic during sort if this interface is not implemented.
+func (s *Subscriber) DumpSorted() ([]Event, error) {
+	es, err := s.Dump()
+	if err != nil {
+		return nil, err
+	}
+	sort.Sort(eventSlice(es))
+	return es, nil
+}
+
+// DumpSortedReverse acts as per DumpSorted, but reverses the sort order,
+// normally giving a descending order rather than an ascending one.
+func (s *Subscriber) DumpSortedReverse() ([]Event, error) {
+	es, err := s.Dump()
+	if err != nil {
+		return nil, err
+	}
+	sort.Sort(sort.Reverse(eventSlice(es)))
 	return es, nil
 }
 
