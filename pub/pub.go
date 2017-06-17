@@ -29,7 +29,7 @@ type IDCollisionError struct {
 	s string
 }
 
-func (e *IDCollisionError) Error() string {
+func (e IDCollisionError) Error() string {
 	return e.s
 }
 
@@ -72,7 +72,7 @@ func NewPublisher(dir string, event interface{}) (*Publisher, error) {
 			return nil, fmt.Errorf("cannot create directory %s: %s", p.dir, err)
 		}
 	case err != nil:
-		return nil, fmt.Errorf("Could not stat dir %s: %s", p.dir, err)
+		return nil, fmt.Errorf("could not stat dir %s: %s", p.dir, err)
 	}
 
 	return p, nil
@@ -100,7 +100,7 @@ func (p *Publisher) Publish(event interface{}) (string, error) {
 	// some other error other than the file being missing, it will be caught when
 	// we write to the file.
 	if _, err := os.Stat(path); err == nil {
-		return "", &IDCollisionError{s: fmt.Sprintf("id collision: %s", id)}
+		return "", IDCollisionError{s: fmt.Sprintf("id collision: %s", id)}
 	}
 
 	if err := ioutil.WriteFile(path, data, 0666); err != nil {
