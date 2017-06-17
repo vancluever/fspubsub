@@ -147,7 +147,7 @@ func NewSubscriber(dir string, event interface{}) (*Subscriber, error) {
 			return nil, fmt.Errorf("cannot create directory %s: %s", s.dir, err)
 		}
 	case err != nil:
-		return nil, fmt.Errorf("Could not stat dir %s: %s", s.dir, err)
+		return nil, fmt.Errorf("could not stat dir %s: %s", s.dir, err)
 	}
 
 	return s, nil
