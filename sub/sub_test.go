@@ -175,7 +175,6 @@ func TestSubscribe(t *testing.T) {
 			var pubID string
 			var actual Event
 			startPub := make(chan struct{})
-			// Set the timeout on this test low - 10 seconds should be plenty.
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*2)
 			defer cancel()
 			go func() {
