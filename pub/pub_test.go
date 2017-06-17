@@ -23,7 +23,7 @@ type BadEvent struct {
 	Ch   chan interface{}
 }
 
-// badRander is a io.Reader that just spits out errors, to simulate a RNG error on UUID generation.
+// badRander is an io.Reader that just spits out errors, to simulate a RNG error on UUID generation.
 type badRander struct{}
 
 // Read just returns an error, to mock an io.Reader.
@@ -31,7 +31,7 @@ func (r *badRander) Read(p []byte) (int, error) {
 	return 0, errors.New("mock reader, always errors")
 }
 
-// nonRander is a io.Reader that just spits out zeros, to ensure identical
+// nonRander is an io.Reader that just spits out zeros, to ensure identical
 // UUIDs are generated for UUID generation.
 type nonRander struct{}
 
