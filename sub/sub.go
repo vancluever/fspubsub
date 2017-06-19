@@ -13,7 +13,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
-	"sync"
 
 	"github.com/rjeczalik/notify"
 )
@@ -95,13 +94,20 @@ type IndexedEvent interface {
 // functions will fail if they encounter non-event data (ie: JSON that it
 // cannot parse into the event type).
 type Subscriber struct {
-	// The event channel. This is buffered to the size of the file system
-	// notification buffer.
-	Queue chan Event
+	// The internal queue channel. Call Queue to get a valid one-way event
+	// channel.
+	queue chan Event
 
-	// The done channel. This should be watched to determine if the event stream
-	// has been shut down.
-	Done chan struct{}
+	// The internal completion channel. Call Queue to get a valid one-way
+	// completion channel.
+	done chan struct{}
+
+	// The internal error field. Call Error to receive this externally.
+	err error
+
+	// An error channel used to pass errors through and control the subscription
+	// lifecycle.
+	errch chan error
 
 	// The directory the event publisher will read events from. This is composed
 	// of a base directory supplied upon creation of the publisher, and the
@@ -112,11 +118,9 @@ type Subscriber struct {
 	// publisher need to match this type.
 	eventType reflect.Type
 
-	// A mutex for blocking access to the watcher.
-	m sync.Mutex
-
-	// An internal channel for signaling that we are done watching FS events.
-	fsDone chan struct{}
+	// If this is true, this subscriber has already been used for watching an
+	// event stream and cannot be used again.
+	opened bool
 }
 
 // NewSubscriber creates a subscriber to a directory-based event stream, being
@@ -129,11 +133,11 @@ func NewSubscriber(dir string, event interface{}) (*Subscriber, error) {
 		return nil, errors.New("event cannot be nil")
 	}
 	s := &Subscriber{
-		Queue:     make(chan Event, defaultBufferSize),
-		Done:      make(chan struct{}, 1),
+		queue:     make(chan Event, defaultBufferSize),
+		done:      make(chan struct{}, 1),
 		dir:       filepath.Clean(dir) + "/" + reflect.TypeOf(event).Name(),
 		eventType: reflect.TypeOf(event),
-		fsDone:    make(chan struct{}, 1),
+		errch:     make(chan error, 1),
 	}
 
 	stat, err := os.Stat(s.dir)
@@ -153,23 +157,57 @@ func NewSubscriber(dir string, event interface{}) (*Subscriber, error) {
 	return s, nil
 }
 
+// Queue returns the event channel. This is buffered to the size of the file
+// system notification buffer.
+func (s *Subscriber) Queue() <-chan Event {
+	return s.queue
+}
+
+// Done returns a channel that closes on termination of the subscription
+// goroutine. Block on this to wait until the stream ends.
+func (s *Subscriber) Done() <-chan struct{} {
+	return s.done
+}
+
+// Err returns the subscription goroutine's return status. This is guaranteed
+// to be nil if the stream has not yet been terminated, so make sure to block
+// on done before checking this value.
+func (s *Subscriber) Error() error {
+	return s.err
+}
+
 // Subscribe starts watching the directory for events, and sends the events
-// over the Queue channel. Only one subscription can be open at any point in
-// time - this function blocks if the subscriber is currently open.
+// over the Queue channel.
+//
+// Only one call to Subscribe can ever be made. A second call results in a
+// panic. If you have used a subscriber to watch a stream and it has closed or
+// errored out, create a new Subscriber.
 //
 // When the stream shuts down, a message will be sent over the Done channel to
 // signal that the consumer should stop reading from the Queue.
 //
+// This function returns after the notifier has been set up and the watcher
+// goroutine has been successfully started. To block until the strem has been
+// shut down or there has been an error, block on the Done channel. The error
+// will then be in the Err attribute, nil or not.
+//
 // If the stream is interrupted for any other reason than the subscriber being
-// closed with Close, this function will return an error. This includes bad
-// event data, which will shut down the subscriber.
+// closed with Close, Err will contain an error, otherwise it will be nil. This
+// includes bad event data, which will shut down the subscriber.
 func (s *Subscriber) Subscribe() error {
-	s.m.Lock()
-	defer s.m.Unlock()
+	if s.opened {
+		return errors.New("subscriber has already been opened")
+	}
 	c := make(chan notify.EventInfo, defaultBufferSize)
 	if err := notify.Watch(s.dir, c, notify.InCloseWrite); err != nil {
 		return fmt.Errorf("error watching directory %s: %s", s.dir, err)
 	}
+	s.opened = true
+	go s.watch(c)
+	return nil
+}
+
+func (s *Subscriber) watch(c chan notify.EventInfo) {
 	defer notify.Stop(c)
 	for {
 		select {
@@ -177,22 +215,22 @@ func (s *Subscriber) Subscribe() error {
 			d := reflect.New(s.eventType)
 			b, err := ioutil.ReadFile(ei.Path())
 			if err != nil {
-				return fmt.Errorf("error reading event data at %s: %s", ei.Path(), err)
+				s.errch <- fmt.Errorf("error reading event data at %s: %s", ei.Path(), err)
+				break
 			}
 			if err := json.Unmarshal(b, d.Interface()); err != nil {
-				return fmt.Errorf("error unmarshaling event data from %s: %s", ei.Path(), err)
+				s.errch <- fmt.Errorf("error unmarshaling event data from %s: %s", ei.Path(), err)
+				break
 			}
-			s.Queue <- Event{
+			s.queue <- Event{
 				ID:   filepath.Base(ei.Path()),
 				Data: d.Elem().Interface(),
 			}
-		case <-s.fsDone:
-			goto done
+		case s.err = <-s.errch:
+			close(s.done)
+			return
 		}
 	}
-done:
-	s.Done <- struct{}{}
-	return nil
 }
 
 // SubscribeCallback is a helper that provides a very simple event loop around
@@ -205,9 +243,9 @@ func (s *Subscriber) SubscribeCallback(cb func(string, interface{})) error {
 	go func() {
 		for {
 			select {
-			case event := <-s.Queue:
+			case event := <-s.Queue():
 				cb(event.ID, event.Data)
-			case <-s.Done:
+			case <-s.Done():
 				return
 			}
 		}
@@ -217,9 +255,9 @@ func (s *Subscriber) SubscribeCallback(cb func(string, interface{})) error {
 
 // Close signals to Subscribe that we are done and that the subscription is no
 // longer needed. This initiates shutdown in Subscribe and will make it return
-// without error, as long as there is none.
+// without error.
 func (s *Subscriber) Close() {
-	s.fsDone <- struct{}{}
+	close(s.errch)
 }
 
 // Dump dumps all of the events in the store for this stream. Technically, it's
