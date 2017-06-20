@@ -98,7 +98,7 @@ type Subscriber struct {
 	// channel.
 	queue chan Event
 
-	// The internal completion channel. Call Queue to get a valid one-way
+	// The internal completion channel. Call Done to get a valid one-way
 	// completion channel.
 	done chan struct{}
 
@@ -196,7 +196,7 @@ func (s *Subscriber) Error() error {
 // includes bad event data, which will shut down the subscriber.
 func (s *Subscriber) Subscribe() error {
 	if s.opened {
-		return errors.New("subscriber has already been opened")
+		panic("calling subscribe on an already opened subscriber")
 	}
 	c := make(chan notify.EventInfo, defaultBufferSize)
 	if err := notify.Watch(s.dir, c, notify.InCloseWrite); err != nil {
@@ -253,9 +253,8 @@ func (s *Subscriber) SubscribeCallback(cb func(string, interface{})) error {
 	return s.Subscribe()
 }
 
-// Close signals to Subscribe that we are done and that the subscription is no
-// longer needed. This initiates shutdown in Subscribe and will make it return
-// without error.
+// Close signals to the Subscriber that we are done and that the subscription
+// is no longer needed. This performs a graceful shutdown of the subscriber.
 func (s *Subscriber) Close() {
 	close(s.errch)
 }
