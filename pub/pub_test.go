@@ -220,7 +220,7 @@ func TestPublish(t *testing.T) {
 					t.Fatalf("expected error to match %q, got %q", tc.Err, err)
 				}
 				if tc.IsCollision {
-					if _, ok := err.(IDCollisionError); !ok {
+					if _, ok := err.(store.IDCollisionError); !ok {
 						t.Fatalf("Error should have been type IDCollisionError, is %s instead", reflect.TypeOf(err).String())
 					}
 				}

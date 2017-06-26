@@ -8,28 +8,16 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"sort"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/davecgh/go-spew/spew"
 	"github.com/vancluever/fspubsub/pub"
 	"github.com/vancluever/fspubsub/store"
 )
 
 type TestEvent struct {
 	Text string
-}
-
-// sortableEvent is a sortable TestEvent.
-type sortableEvent struct {
-	TestEvent
-}
-
-// Less implements IndexedEvent for sortableEvent.
-func (i sortableEvent) Less(j interface{}) bool {
-	return i.Text < j.(sortableEvent).Text
 }
 
 func TestNewSubscriber(t *testing.T) {
@@ -169,7 +157,7 @@ func testWatchRun(tc watchTestCase) error {
 		defer tc.Postsub(dir)
 	}
 	var timeout bool
-	var actual Event
+	var actual store.Event
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*2)
 	defer cancel()
 	go func() {
@@ -221,7 +209,7 @@ func testWatchRun(tc watchTestCase) error {
 		return nil
 	}
 
-	expected := Event{
+	expected := store.Event{
 		ID:   pubID,
 		Data: tc.EventData,
 	}
@@ -251,111 +239,6 @@ func BenchmarkWatch(b *testing.B) {
 				if err := testWatchRun(tc); err != nil {
 					b.Fatal(err)
 				}
-			}
-		})
-	}
-}
-
-func TestDump(t *testing.T) {
-	cases := []struct {
-		Name      string
-		EventType interface{}
-		EventData []interface{}
-		Predump   func(string)
-		Postdump  func(string)
-		Pubfunc   func(string) error
-		Err       string
-	}{
-		{
-			Name:      "basic success case",
-			EventType: sortableEvent{},
-			EventData: []interface{}{sortableEvent{TestEvent: TestEvent{Text: "foobar"}}, sortableEvent{TestEvent{Text: "bazqux"}}},
-		},
-		{
-			Name:      "readdir error",
-			EventType: sortableEvent{},
-			Predump:   func(d string) { os.Chmod(d, 0000) },
-			Postdump:  func(d string) { os.Chmod(d, 0777) },
-			Err:       "could not stat dir",
-		},
-		{
-			Name:      "bad event permissions",
-			EventType: sortableEvent{},
-			Postdump:  func(d string) { os.Chmod(d+"/sortableEvent/bad", 0666) },
-			Pubfunc: func(d string) error {
-				err := os.MkdirAll(d+"/sortableEvent", 0777)
-				if err != nil {
-					return err
-				}
-				return ioutil.WriteFile(d+"/sortableEvent/bad", []byte("{\"Text\": \"\"}"), 0000)
-			},
-			Err: "error reading event data at",
-		},
-		{
-			Name:      "bad event data",
-			EventType: sortableEvent{},
-			Pubfunc: func(d string) error {
-				err := os.MkdirAll(d+"/sortableEvent", 0777)
-				if err != nil {
-					return err
-				}
-				return ioutil.WriteFile(d+"/sortableEvent/bad", []byte("{\"Text\": 42}"), 0666)
-			},
-			Err: "error unmarshaling event data from",
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.Name, func(t *testing.T) {
-			dir, _ := ioutil.TempDir("", "subtest")
-			defer os.RemoveAll(dir)
-			var expected []Event
-			if tc.Pubfunc != nil {
-				if err := tc.Pubfunc(dir); err != nil {
-					t.Fatalf("bad: %s", err)
-				}
-			} else {
-				p, err := pub.NewPublisher(dir, tc.EventType)
-				if err != nil {
-					t.Fatalf("bad: %s", err)
-				}
-				for _, e := range tc.EventData {
-					id, err := p.Publish(e)
-					if err != nil {
-						t.Fatalf("bad: %s", err)
-					}
-					expected = append(expected, Event{
-						ID:   id,
-						Data: e,
-					})
-				}
-			}
-
-			if tc.Predump != nil {
-				tc.Predump(dir)
-			}
-			if tc.Postdump != nil {
-				defer tc.Postdump(dir)
-			}
-			actual, err := Dump(dir, tc.EventType)
-			switch {
-			case err != nil && tc.Err == "":
-				t.Fatalf("bad: %s", err)
-			case err == nil && tc.Err != "":
-				t.Fatal("expected error, got none")
-			case err != nil && tc.Err != "":
-				if !strings.Contains(err.Error(), tc.Err) {
-					t.Fatalf("expected error to match %q, got %q", tc.Err, err)
-				}
-				return
-			}
-
-			sort.Sort(eventSlice(expected))
-			// actual needs to be sorted here as an unsorted Dump is non-deterministic.
-			sort.Sort(eventSlice(actual))
-
-			if !reflect.DeepEqual(expected, actual) {
-				t.Fatalf("expected:\n\n%s\ngot:\n\n%s\n", spew.Sdump(expected), spew.Sdump(actual))
 			}
 		})
 	}
