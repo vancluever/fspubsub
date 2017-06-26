@@ -4,14 +4,13 @@ package pub
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io/ioutil"
 	"os"
-	"path/filepath"
 	"reflect"
 
 	"github.com/google/uuid"
+	"github.com/vancluever/fspubsub/store"
 )
 
 // IDCollisionError is an error type that is returned on a UUID collision.
@@ -36,14 +35,7 @@ func (e IDCollisionError) Error() string {
 // Publisher is a simple event publisher, designed to publish events to the
 // file system.
 type Publisher struct {
-	// The directory the event publisher will depost its events in. This is
-	// composed of a base directory supplied upon creation of the publisher, and
-	// the package-local name of the type used for the event.
-	dir string
-
-	// The type for the event that this publisher processes. Events passed to the
-	// publisher need to match this type.
-	eventType reflect.Type
+	*store.Stream
 }
 
 // NewPublisher creates a publisher for the specific type. The events are
@@ -53,36 +45,21 @@ type Publisher struct {
 // Any data in event is ignored - it just serves to infer the type of event
 // this publisher is locked to.
 func NewPublisher(dir string, event interface{}) (*Publisher, error) {
-	if event == nil {
-		return nil, errors.New("event cannot be nil")
+	stream, err := store.NewStream(dir, event)
+	if err != nil {
+		return nil, err
 	}
 	p := &Publisher{
-		dir:       filepath.Clean(dir) + "/" + reflect.TypeOf(event).Name(),
-		eventType: reflect.TypeOf(event),
+		Stream: stream,
 	}
-
-	stat, err := os.Stat(p.dir)
-	switch {
-	case err == nil:
-		if !stat.Mode().IsDir() {
-			return nil, fmt.Errorf("%s exists and is not a directory", p.dir)
-		}
-	case err != nil && os.IsNotExist(err):
-		if err := os.Mkdir(p.dir, 0777); err != nil {
-			return nil, fmt.Errorf("cannot create directory %s: %s", p.dir, err)
-		}
-	case err != nil:
-		return nil, fmt.Errorf("could not stat dir %s: %s", p.dir, err)
-	}
-
 	return p, nil
 }
 
 // Publish publishes an event. The event is a single file in the directory,
 // with a v4 UUID as the ID and filename. The ID is returned as a string.
 func (p *Publisher) Publish(event interface{}) (string, error) {
-	if reflect.TypeOf(event) != p.eventType {
-		return "", fmt.Errorf("event of type %s does not match publisher type %s", reflect.TypeOf(event), p.eventType)
+	if reflect.TypeOf(event) != p.Stream.EventType() {
+		return "", fmt.Errorf("event of type %s does not match publisher type %s", reflect.TypeOf(event), p.Stream.EventType())
 	}
 	data, err := json.Marshal(event)
 	if err != nil {
@@ -93,7 +70,7 @@ func (p *Publisher) Publish(event interface{}) (string, error) {
 		return "", fmt.Errorf("could not generate ID: %s", err)
 	}
 
-	path := p.dir + "/" + id.String()
+	path := p.Stream.Dir() + "/" + id.String()
 	// If this path responds to stat, then the path exists in some way, shape, or
 	// form, and is not valid for use. This is almost always due to a UUID
 	// collision, so return IDCollisionError. If the stat failed and it is due to
