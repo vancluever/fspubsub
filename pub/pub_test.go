@@ -12,7 +12,6 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/vancluever/fspubsub/store"
 )
 
 type TestEvent struct {
@@ -120,12 +119,9 @@ func TestNewPublisher(t *testing.T) {
 				}
 				return
 			}
-			expectedStream, err := store.NewStream(dir, tc.EventType)
-			if err != nil {
-				t.Fatalf("bad: %s", err)
-			}
 			expected := &Publisher{
-				Stream: expectedStream,
+				dir:       dir + "/" + reflect.TypeOf(tc.EventType).Name(),
+				eventType: reflect.TypeOf(tc.EventType),
 			}
 
 			if !reflect.DeepEqual(expected, pub) {
