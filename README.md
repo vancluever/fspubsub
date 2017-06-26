@@ -46,10 +46,8 @@ if err != nil {
 }
 ```
 
-To listen for events on the stream, create a new subscriber via `NewSubscriber`.
-You can then use `Queue()` to get a channel where you can watch for events, and
-`Done()` to get a channel that will close when the stream is done or fails for
-some other reason. The error will be in `Error()` when done, if any.
+To listen for events on the stream, create a new subscriber, and then call
+`Subscribe`. This will start to send events through the respective channel.
 
 ```
 s, err := sub.NewSubscriber(wd, TestEvent{})
@@ -59,33 +57,34 @@ if err != nil {
 go func() {
   for {
     select {
-    case event := <-s.Queue():
-      // Do something with event here
-    case <-s.Done():
+    case event := <-s.Queue:
+      log.Printf("[INFO] Event %s received: %#v", event.ID, event.Data)
+    case <-s.Done:
       return
     }
   }
 }()
-<-s.Done()
-if s.Error() != nil {
-  log.Fatalf("[FATAL] Error while listening to events: %s", s.Error())
+if err := s.Subscribe(); err != nil {
+  log.Fatalf("[FATAL] Error listening to events: %s", err)
 }
 ```
+
+`Subscribe` blocks until there is an error in the stream or the subscription is
+shut down with `Close`.
 
 If all you need in your event loop is this basic setup, you can also use
-`NewSubscriberWithCallback`:
+`SubscribeCallback`:
 
 ```
-cb := func(e sub.Event) {
-      log.Printf("[INFO] Event %s received: %#v", e.ID, e.Data)
-}
-s, err := sub.NewSubscriberWithCallback(wd, TestEvent{}, cb)
+s, err := sub.NewSubscriber(wd, TestEvent{})
 if err != nil {
   log.Fatalf("[FATAL] Cannot create subscriber: %s", err)
 }
-<-s.Done()
-if s.Error() != nil {
-  log.Fatalf("[FATAL] Error while listening to events: %s", s.Error())
+cb := func(id string, data interface{}) {
+      log.Printf("[INFO] Event %s received: %#v", id, data)
+}
+if err := s.SubscribeCallback(cb); err != nil {
+  log.Fatalf("[FATAL] Error listening to events: %s", err)
 }
 ```
 

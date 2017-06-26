@@ -6,14 +6,15 @@ package sub
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/ioutil"
+	"os"
 	"path/filepath"
 	"reflect"
 	"sort"
 
 	"github.com/rjeczalik/notify"
-	"github.com/vancluever/fspubsub/store"
 )
 
 // defaultNotifyBufferSize describes the default buffer size. This is used for
@@ -93,13 +94,11 @@ type IndexedEvent interface {
 // functions will fail if they encounter non-event data (ie: JSON that it
 // cannot parse into the event type).
 type Subscriber struct {
-	*store.Stream
-
 	// The internal queue channel. Call Queue to get a valid one-way event
 	// channel.
 	queue chan Event
 
-	// The internal completion channel. Call Done to get a valid one-way
+	// The internal completion channel. Call Queue to get a valid one-way
 	// completion channel.
 	done chan struct{}
 
@@ -109,6 +108,53 @@ type Subscriber struct {
 	// An error channel used to pass errors through and control the subscription
 	// lifecycle.
 	errch chan error
+
+	// The directory the event publisher will read events from. This is composed
+	// of a base directory supplied upon creation of the publisher, and the
+	// package-local name of the type used for the event.
+	dir string
+
+	// The type for the event that this publisher processes. Events passed to the
+	// publisher need to match this type.
+	eventType reflect.Type
+
+	// If this is true, this subscriber has already been used for watching an
+	// event stream and cannot be used again.
+	opened bool
+}
+
+// NewSubscriber creates a subscriber to a directory-based event stream, being
+// a mix of the path supplied and the event type passed to event.
+//
+// Any data in event is ignored - it just serves to infer the type of event
+// this subscriber is locked to.
+func NewSubscriber(dir string, event interface{}) (*Subscriber, error) {
+	if event == nil {
+		return nil, errors.New("event cannot be nil")
+	}
+	s := &Subscriber{
+		queue:     make(chan Event, defaultBufferSize),
+		done:      make(chan struct{}, 1),
+		dir:       filepath.Clean(dir) + "/" + reflect.TypeOf(event).Name(),
+		eventType: reflect.TypeOf(event),
+		errch:     make(chan error, 1),
+	}
+
+	stat, err := os.Stat(s.dir)
+	switch {
+	case err == nil:
+		if !stat.Mode().IsDir() {
+			return nil, fmt.Errorf("%s exists and is not a directory", s.dir)
+		}
+	case err != nil && os.IsNotExist(err):
+		if err := os.Mkdir(s.dir, 0777); err != nil {
+			return nil, fmt.Errorf("cannot create directory %s: %s", s.dir, err)
+		}
+	case err != nil:
+		return nil, fmt.Errorf("could not stat dir %s: %s", s.dir, err)
+	}
+
+	return s, nil
 }
 
 // Queue returns the event channel. This is buffered to the size of the file
@@ -123,48 +169,42 @@ func (s *Subscriber) Done() <-chan struct{} {
 	return s.done
 }
 
-// Error returns the subscription goroutine's return status. This is guaranteed
+// Err returns the subscription goroutine's return status. This is guaranteed
 // to be nil if the stream has not yet been terminated, so make sure to block
 // on done before checking this value.
 func (s *Subscriber) Error() error {
 	return s.err
 }
 
-// NewSubscriber starts watching the a directory for the event described in
-// event. The events are sent over the channel returned by the Queue function.
+// Subscribe starts watching the directory for events, and sends the events
+// over the Queue channel.
 //
-// When the stream shuts down, a message will be sent over the channel returned
-// by the Done function to signal that the consumer should stop reading from
-// the Queue.
+// Only one call to Subscribe can ever be made. A second call results in a
+// panic. If you have used a subscriber to watch a stream and it has closed or
+// errored out, create a new Subscriber.
+//
+// When the stream shuts down, a message will be sent over the Done channel to
+// signal that the consumer should stop reading from the Queue.
 //
 // This function returns after the notifier has been set up and the watcher
-// goroutine has been successfully started. To wait until the strem has been
-// shut down or there has been an error, block on the channel returned by the
-// Done function.
+// goroutine has been successfully started. To block until the strem has been
+// shut down or there has been an error, block on the Done channel. The error
+// will then be in the Err attribute, nil or not.
 //
-// The final return status will be contained in the error returned by the Error
-// function (nil means no error). If the stream is interrupted for any other
-// reason than the subscriber being closed with Close, Error will contain the
-// reason for failure.  This includes bad event data, which will shut down the
-// subscriber.
-func NewSubscriber(dir string, event interface{}) (*Subscriber, error) {
-	stream, err := store.NewStream(dir, event)
-	if err != nil {
-		return nil, err
-	}
-
-	s := &Subscriber{
-		Stream: stream,
-		queue:  make(chan Event, defaultBufferSize),
-		done:   make(chan struct{}, 1),
-		errch:  make(chan error, 1),
+// If the stream is interrupted for any other reason than the subscriber being
+// closed with Close, Err will contain an error, otherwise it will be nil. This
+// includes bad event data, which will shut down the subscriber.
+func (s *Subscriber) Subscribe() error {
+	if s.opened {
+		return errors.New("subscriber has already been opened")
 	}
 	c := make(chan notify.EventInfo, defaultBufferSize)
-	if err := notify.Watch(s.Stream.Dir(), c, notify.InCloseWrite); err != nil {
-		return nil, fmt.Errorf("error watching directory %s: %s", s.Stream.Dir(), err)
+	if err := notify.Watch(s.dir, c, notify.InCloseWrite); err != nil {
+		return fmt.Errorf("error watching directory %s: %s", s.dir, err)
 	}
+	s.opened = true
 	go s.watch(c)
-	return s, nil
+	return nil
 }
 
 func (s *Subscriber) watch(c chan notify.EventInfo) {
@@ -172,12 +212,20 @@ func (s *Subscriber) watch(c chan notify.EventInfo) {
 	for {
 		select {
 		case ei := <-c:
-			e, err := decodeEvent(ei.Path(), s.Stream.EventType())
+			d := reflect.New(s.eventType)
+			b, err := ioutil.ReadFile(ei.Path())
 			if err != nil {
-				s.errch <- err
+				s.errch <- fmt.Errorf("error reading event data at %s: %s", ei.Path(), err)
 				break
 			}
-			s.queue <- e
+			if err := json.Unmarshal(b, d.Interface()); err != nil {
+				s.errch <- fmt.Errorf("error unmarshaling event data from %s: %s", ei.Path(), err)
+				break
+			}
+			s.queue <- Event{
+				ID:   filepath.Base(ei.Path()),
+				Data: d.Elem().Interface(),
+			}
 		case s.err = <-s.errch:
 			close(s.done)
 			return
@@ -185,95 +233,73 @@ func (s *Subscriber) watch(c chan notify.EventInfo) {
 	}
 }
 
-// decodeEvent is an internal helper that decodes a file at path and returns an
-// Event.
-func decodeEvent(path string, eventType reflect.Type) (Event, error) {
-	d := reflect.New(eventType)
-	b, err := ioutil.ReadFile(path)
-	if err != nil {
-		return Event{}, fmt.Errorf("error reading event data at %s: %s", path, err)
-	}
-	if err := json.Unmarshal(b, d.Interface()); err != nil {
-		return Event{}, fmt.Errorf("error unmarshaling event data from %s: %s", path, err)
-	}
-	return Event{
-		ID:   filepath.Base(path),
-		Data: d.Elem().Interface(),
-	}, nil
-}
-
-// NewSubscriberWithCallback is a helper that provides a very simple event loop
-// around a Subscriber. Events are passed to the callback function supplied by
-// cb.
+// SubscribeCallback is a helper that provides a very simple event loop around
+// Subscribe. Events are passed to the callback function supplied by cb, with
+// the ID and data.
 //
 // This function does not take responsbility for handling event processing
-// errors. The caller should ensure they are handling errors as normal by
-// waiting on the Done channel and processing any errors returned by the Error
-// function afterward.
-func NewSubscriberWithCallback(dir string, event interface{}, cb func(Event)) (*Subscriber, error) {
-	s, err := NewSubscriber(dir, event)
-	if err != nil {
-		return nil, err
-	}
+// errors. It's up to the callback to handle errors as it sees fit.
+func (s *Subscriber) SubscribeCallback(cb func(string, interface{})) error {
 	go func() {
 		for {
 			select {
 			case event := <-s.Queue():
-				cb(event)
+				cb(event.ID, event.Data)
 			case <-s.Done():
 				return
 			}
 		}
 	}()
-	return s, nil
+	return s.Subscribe()
 }
 
-// Close signals to the Subscriber that we are done and that the subscription
-// is no longer needed. This performs a graceful shutdown of the subscriber.
+// Close signals to Subscribe that we are done and that the subscription is no
+// longer needed. This initiates shutdown in Subscribe and will make it return
+// without error.
 func (s *Subscriber) Close() {
 	close(s.errch)
 }
 
-// Dump dumps all of the events in the store for stream described by dir and
-// event. Technically, it's just dumping all of the events in the directory.
-// The events are returned as an Event slice.
+// Dump dumps all of the events in the store for this stream. Technically, it's
+// just dumping all of the events in the directory that the stream has been
+// configured to watch. This is returned as an Event slice.
 //
 // The order of the returned events is not deterministic. If it is up to the
 // consumer to structure the data or the handling of the data in a way that
 // facilitates proper hydration.
-func Dump(dir string, event interface{}) ([]Event, error) {
-	stream, err := store.NewStream(dir, event)
-	if err != nil {
-		return nil, err
-	}
-
-	return dump(stream)
-}
-
-func dump(s *store.Stream) ([]Event, error) {
-	entries, err := ioutil.ReadDir(s.Dir())
+func (s *Subscriber) Dump() ([]Event, error) {
+	entries, err := ioutil.ReadDir(s.dir)
 	var es []Event
 	if err != nil {
-		return nil, fmt.Errorf("error reading event directory %s: %s", s.Dir(), err)
+		return nil, fmt.Errorf("error reading event directory %s: %s", s.dir, err)
 	}
 	for _, f := range entries {
 		if !f.Mode().IsRegular() {
 			continue
 		}
-		e, err := decodeEvent(s.Dir()+"/"+f.Name(), s.EventType())
+		id := f.Name()
+		ep := s.dir + "/" + id
+		d := reflect.New(s.eventType)
+		b, err := ioutil.ReadFile(ep)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("error reading event data at %s: %s", ep, err)
 		}
-		es = append(es, e)
+		if err := json.Unmarshal(b, d.Interface()); err != nil {
+			return nil, fmt.Errorf("error unmarshaling event data from %s: %s", ep, err)
+		}
+		es = append(es, Event{
+			ID:   id,
+			Data: d.Elem().Interface(),
+		})
 	}
 	return es, nil
 }
 
-// DumpSorted works as per Dump, but sorts the returned events according to the
+// DumpSorted dumps all of the events, and then sorts them according to the
 // criteria defined by the event type's IndexedEvent interface. The function
 // will panic during sort if this interface is not implemented.
-func (s *Subscriber) DumpSorted(dir string, event interface{}) ([]Event, error) {
-	es, err := Dump(dir, event)
+func (s *Subscriber) DumpSorted() ([]Event, error) {
+	es, err := s.Dump()
 	if err != nil {
 		return nil, err
 	}
@@ -283,8 +309,8 @@ func (s *Subscriber) DumpSorted(dir string, event interface{}) ([]Event, error) 
 
 // DumpSortedReverse acts as per DumpSorted, but reverses the sort order,
 // normally giving a descending order rather than an ascending one.
-func (s *Subscriber) DumpSortedReverse(dir string, event interface{}) ([]Event, error) {
-	es, err := Dump(dir, event)
+func (s *Subscriber) DumpSortedReverse() ([]Event, error) {
+	es, err := s.Dump()
 	if err != nil {
 		return nil, err
 	}
@@ -292,12 +318,20 @@ func (s *Subscriber) DumpSortedReverse(dir string, event interface{}) ([]Event, 
 	return es, nil
 }
 
-// Fetch reads a single event from the store described by dir and type. The
-// supplied ID is essentially the file name.
-func (s *Subscriber) Fetch(dir string, event interface{}, id string) (Event, error) {
-	stream, err := store.NewStream(dir, event)
+// Fetch reads a single event from the store. The supplied ID is essentially the
+// file name.
+func (s *Subscriber) Fetch(id string) (Event, error) {
+	var e Event
+	ep := s.dir + "/" + id
+	d := reflect.New(s.eventType)
+	b, err := ioutil.ReadFile(ep)
 	if err != nil {
-		return Event{}, err
+		return e, fmt.Errorf("error reading event data at %s: %s", ep, err)
 	}
-	return decodeEvent(stream.Dir()+"/"+id, stream.EventType())
+	if err := json.Unmarshal(b, d.Interface()); err != nil {
+		return e, fmt.Errorf("error unmarshaling event data from %s: %s", ep, err)
+	}
+	e.ID = id
+	e.Data = d.Elem().Interface()
+	return e, nil
 }
