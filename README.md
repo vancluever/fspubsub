@@ -47,9 +47,9 @@ if err != nil {
 ```
 
 To listen for events on the stream, create a new subscriber via `NewSubscriber`.
-You can then use `Queue()` to get a channel where you can watch for events, and
-`Done()` to get a channel that will close when the stream is done or fails for
-some other reason. The error will be in `Error()` when done, if any.
+You can then use `Queue` to get a channel where you can watch for events, and
+`Done` to get a channel that will close when the stream is done or fails for
+some other reason. The error will be in `Error` when done, if any.
 
 ```
 s, err := sub.NewSubscriber(wd, TestEvent{})
