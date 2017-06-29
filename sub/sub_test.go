@@ -8,27 +8,16 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"sort"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/davecgh/go-spew/spew"
 	"github.com/vancluever/fspubsub/pub"
+	"github.com/vancluever/fspubsub/store"
 )
 
 type TestEvent struct {
 	Text string
-}
-
-// sortableEvent is a sortable TestEvent.
-type sortableEvent struct {
-	TestEvent
-}
-
-// Less implements IndexedEvent for sortableEvent.
-func (i sortableEvent) Less(j interface{}) bool {
-	return i.Text < j.(sortableEvent).Text
 }
 
 func TestNewSubscriber(t *testing.T) {
@@ -108,14 +97,13 @@ func TestNewSubscriber(t *testing.T) {
 				return
 			}
 
-			expectedDir := filepath.Clean(dir) + "/" + reflect.TypeOf(tc.EventType).Name()
-			expectedEventType := reflect.TypeOf(tc.EventType)
-
-			if expectedDir != sub.dir {
-				t.Fatalf("expected dir to be %q, got %q", expectedDir, sub.dir)
+			expectedStream, err := store.NewStream(dir, tc.EventType)
+			if err != nil {
+				t.Fatalf("bad: %s", err)
 			}
-			if expectedEventType != sub.eventType {
-				t.Fatalf("expected eventType to be %s, got %s", expectedEventType, sub.eventType)
+
+			if !reflect.DeepEqual(expectedStream, sub.Stream) {
+				t.Fatalf("expected:\n\n%s\ngot:\n\n%s\n", expectedStream, sub.Stream)
 			}
 		})
 	}
@@ -152,7 +140,7 @@ var watchTestCases = []watchTestCase{
 	},
 }
 
-// testWatchRun tests a watch run using the appropriate parameters and reutnrs
+// testWatchRun tests a watch run using the appropriate parameters and returns
 // the error. This is wrapped so that normal tests can be performed in addition
 // to a race test.
 func testWatchRun(tc watchTestCase) error {
@@ -160,7 +148,7 @@ func testWatchRun(tc watchTestCase) error {
 	defer os.RemoveAll(dir)
 	sub, err := NewSubscriber(dir, tc.EventType)
 	if err != nil {
-		return fmt.Errorf("bad: %s", err)
+		return fmt.Errorf("NewSubscriber: bad: %s", err)
 	}
 	if tc.Presub != nil {
 		tc.Presub(dir)
@@ -169,7 +157,7 @@ func testWatchRun(tc watchTestCase) error {
 		defer tc.Postsub(dir)
 	}
 	var timeout bool
-	var actual Event
+	var actual store.Event
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*2)
 	defer cancel()
 	go func() {
@@ -189,23 +177,19 @@ func testWatchRun(tc watchTestCase) error {
 		}
 	}()
 
-	if err := sub.Subscribe(); err != nil {
-		return fmt.Errorf("bad: %s", err)
-	}
-
 	var pubID string
 	if tc.Pubfunc != nil {
 		if err := tc.Pubfunc(dir); err != nil {
-			return fmt.Errorf("bad: %s", err)
+			return fmt.Errorf("Pubfunc: bad: %s", err)
 		}
 	} else {
 		p, err := pub.NewPublisher(dir, tc.EventType)
 		if err != nil {
-			return fmt.Errorf("bad: %s", err)
+			return fmt.Errorf("NewPublisher: bad: %s", err)
 		}
 		pubID, err = p.Publish(tc.EventData)
 		if err != nil {
-			return fmt.Errorf("bad: %s", err)
+			return fmt.Errorf("Publish: bad: %s", err)
 		}
 	}
 
@@ -215,7 +199,7 @@ func testWatchRun(tc watchTestCase) error {
 	case timeout:
 		return errors.New("timed out waiting for event")
 	case sub.Error() != nil && tc.Err == "":
-		return fmt.Errorf("bad: %s", err)
+		return fmt.Errorf("Subscriber error: bad: %s", err)
 	case sub.Error() == nil && tc.Err != "":
 		return errors.New("expected error, got none")
 	case sub.Error() != nil && tc.Err != "":
@@ -225,7 +209,7 @@ func testWatchRun(tc watchTestCase) error {
 		return nil
 	}
 
-	expected := Event{
+	expected := store.Event{
 		ID:   pubID,
 		Data: tc.EventData,
 	}
@@ -255,170 +239,6 @@ func BenchmarkWatch(b *testing.B) {
 				if err := testWatchRun(tc); err != nil {
 					b.Fatal(err)
 				}
-			}
-		})
-	}
-}
-
-func TestSubscribeCallback(t *testing.T) {
-	tc := struct {
-		EventType interface{}
-		EventData interface{}
-	}{
-		EventType: TestEvent{},
-		EventData: TestEvent{Text: "foobar"},
-	}
-
-	dir, _ := ioutil.TempDir("", "subtest")
-	defer os.RemoveAll(dir)
-	sub, err := NewSubscriber(dir, tc.EventType)
-	if err != nil {
-		t.Fatalf("bad: %s", err)
-	}
-	var timeout bool
-	var pubErr error
-	var pubID string
-	var actual Event
-	// Set the timeout on this test low - 10 seconds should be plenty.
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
-	defer cancel()
-	go func() {
-		var p *pub.Publisher
-		p, pubErr = pub.NewPublisher(dir, tc.EventType)
-		if pubErr != nil {
-			return
-		}
-		pubID, pubErr = p.Publish(tc.EventData)
-	}()
-	cb := func(id string, data interface{}) {
-		actual.ID = id
-		actual.Data = data
-		sub.Close()
-	}
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				timeout = true
-				sub.Close()
-				return
-			}
-		}
-	}()
-	err = sub.SubscribeCallback(cb)
-	switch {
-	case timeout:
-		t.Fatal("timed out waiting for event")
-	case pubErr != nil:
-		t.Fatalf("error publishing event: %s", pubErr)
-	case err != nil:
-		t.Fatalf("bad: %s", err)
-	}
-
-	expected := Event{
-		ID:   pubID,
-		Data: tc.EventData,
-	}
-
-	if !reflect.DeepEqual(expected, actual) {
-		t.Fatalf("expected %#v, got %#v", tc.EventData, actual.Data)
-	}
-}
-
-func TestDump(t *testing.T) {
-	cases := []struct {
-		Name      string
-		EventType interface{}
-		EventData []interface{}
-		Predump   func(string)
-		Postdump  func(string)
-		Pubfunc   func(string) error
-		Err       string
-	}{
-		{
-			Name:      "basic success case",
-			EventType: sortableEvent{},
-			EventData: []interface{}{sortableEvent{TestEvent: TestEvent{Text: "foobar"}}, sortableEvent{TestEvent{Text: "bazqux"}}},
-		},
-		{
-			Name:      "readdir error",
-			EventType: sortableEvent{},
-			Predump:   func(d string) { os.Chmod(d, 0000) },
-			Postdump:  func(d string) { os.Chmod(d, 0777) },
-			Err:       "error reading event directory",
-		},
-		{
-			Name:      "bad event permissions",
-			EventType: sortableEvent{},
-			Postdump:  func(d string) { os.Chmod(d+"/sortableEvent/bad", 0666) },
-			Pubfunc: func(d string) error {
-				return ioutil.WriteFile(d+"/sortableEvent/bad", []byte("{\"Text\": \"\"}"), 0000)
-			},
-			Err: "error reading event data at",
-		},
-		{
-			Name:      "bad event data",
-			EventType: sortableEvent{},
-			Pubfunc:   func(d string) error { return ioutil.WriteFile(d+"/sortableEvent/bad", []byte("{\"Text\": 42}"), 0666) },
-			Err:       "error unmarshaling event data from",
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.Name, func(t *testing.T) {
-			dir, _ := ioutil.TempDir("", "subtest")
-			defer os.RemoveAll(dir)
-			sub, err := NewSubscriber(dir, tc.EventType)
-			if err != nil {
-				t.Fatalf("bad: %s", err)
-			}
-			var expected []Event
-			if tc.Pubfunc != nil {
-				if err := tc.Pubfunc(dir); err != nil {
-					t.Fatalf("bad: %s", err)
-				}
-			} else {
-				p, err := pub.NewPublisher(dir, tc.EventType)
-				if err != nil {
-					t.Fatalf("bad: %s", err)
-				}
-				for _, e := range tc.EventData {
-					id, err := p.Publish(e)
-					if err != nil {
-						t.Fatalf("bad: %s", err)
-					}
-					expected = append(expected, Event{
-						ID:   id,
-						Data: e,
-					})
-				}
-			}
-
-			if tc.Predump != nil {
-				tc.Predump(dir)
-			}
-			if tc.Postdump != nil {
-				defer tc.Postdump(dir)
-			}
-			actual, err := sub.Dump()
-			switch {
-			case err != nil && tc.Err == "":
-				t.Fatalf("bad: %s", err)
-			case err == nil && tc.Err != "":
-				t.Fatal("expected error, got none")
-			case err != nil && tc.Err != "":
-				if !strings.Contains(err.Error(), tc.Err) {
-					t.Fatalf("expected error to match %q, got %q", tc.Err, err)
-				}
-				return
-			}
-
-			sort.Sort(eventSlice(expected))
-			// actual needs to be sorted here as an unsorted Dump is non-deterministic.
-			sort.Sort(eventSlice(actual))
-
-			if !reflect.DeepEqual(expected, actual) {
-				t.Fatalf("expected:\n\n%s\ngot:\n\n%s\n", spew.Sdump(expected), spew.Sdump(actual))
 			}
 		})
 	}
