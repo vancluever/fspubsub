@@ -146,7 +146,7 @@ func (s *Stream) EventType() reflect.Type {
 }
 
 // WriteEvent writes an event, with the file name taking on the ID passed in to
-// id. This is generally designed to be used by publishers in the pub pacakge,
+// id. This is generally designed to be used by publishers in the pub package,
 // but is separated to help with testing.
 func (s *Stream) WriteEvent(id string, event interface{}) error {
 	if reflect.TypeOf(event) != s.EventType() {

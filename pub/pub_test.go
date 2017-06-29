@@ -155,7 +155,7 @@ func TestPublish(t *testing.T) {
 			Name:      "mismatched event type",
 			EventType: TestEvent{},
 			EventData: BadEvent{Text: "foobar", Ch: make(chan interface{})},
-			Err:       "event of type pub.BadEvent does not match publisher type pub.TestEvent",
+			Err:       "event of type pub.BadEvent does not match stream type pub.TestEvent",
 		},
 		{
 			Name:      "json marshaling error",

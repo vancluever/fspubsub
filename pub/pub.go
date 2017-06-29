@@ -40,7 +40,7 @@ func (p *Publisher) Publish(event interface{}) (string, error) {
 		return "", fmt.Errorf("could not generate ID: %s", err)
 	}
 
-	if p.Stream.WriteEvent(id.String(), event); err != nil {
+	if err := p.Stream.WriteEvent(id.String(), event); err != nil {
 		return "", err
 	}
 
