@@ -124,32 +124,6 @@ func (s *Subscriber) watch(c chan notify.EventInfo) {
 	}
 }
 
-// NewSubscriberWithCallback is a helper that provides a very simple event loop
-// around a Subscriber. Events are passed to the callback function supplied by
-// cb.
-//
-// This function does not take responsibility for handling event processing
-// errors. The caller should ensure they are handling errors as normal by
-// waiting on the Done channel and processing any errors returned by the Error
-// function afterward.
-func NewSubscriberWithCallback(dir string, event interface{}, cb func(store.Event)) (*Subscriber, error) {
-	s, err := NewSubscriber(dir, event)
-	if err != nil {
-		return nil, err
-	}
-	go func() {
-		for {
-			select {
-			case event := <-s.Queue():
-				cb(event)
-			case <-s.Done():
-				return
-			}
-		}
-	}()
-	return s, nil
-}
-
 // Close signals to the Subscriber that we are done and that the subscription
 // is no longer needed. This performs a graceful shutdown of the subscriber.
 func (s *Subscriber) Close() {

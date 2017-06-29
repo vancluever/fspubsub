@@ -60,19 +60,4 @@
 //     log.Fatalf("[FATAL] Error while listening to events: %s", s.Error())
 //   }
 //
-// If all you need in your event loop is this basic setup, you can also use
-// NewSubscriberWithCallback:
-//
-//   cb := func(e sub.Event) {
-//         log.Printf("[INFO] Event %s received: %#v", e.ID, e.Data)
-//   }
-//   s, err := sub.NewSubscriberWithCallback(wd, TestEvent{}, cb)
-//   if err != nil {
-//     log.Fatalf("[FATAL] Cannot create subscriber: %s", err)
-//   }
-//   <-s.Done()
-//   if s.Error() != nil {
-//     log.Fatalf("[FATAL] Error while listening to events: %s", s.Error())
-//   }
-//
 package fspubsub
