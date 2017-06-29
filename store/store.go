@@ -60,7 +60,7 @@ func (p eventSlice) Len() int {
 func (p eventSlice) Less(i, j int) bool {
 	v, ok := p[i].Data.(IndexedEvent)
 	if !ok {
-		panic(fmt.Errorf("Event at index %d with type %T does not implement sub.IndexedEvent", i, p[i]))
+		panic(fmt.Errorf("Event at index %d with type %T does not implement IndexedEvent", i, p[i]))
 	}
 	return v.Less(p[j].Data)
 }
