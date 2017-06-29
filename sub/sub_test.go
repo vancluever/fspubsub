@@ -140,7 +140,7 @@ var watchTestCases = []watchTestCase{
 	},
 }
 
-// testWatchRun tests a watch run using the appropriate parameters and reutnrs
+// testWatchRun tests a watch run using the appropriate parameters and returns
 // the error. This is wrapped so that normal tests can be performed in addition
 // to a race test.
 func testWatchRun(tc watchTestCase) error {

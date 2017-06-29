@@ -69,7 +69,7 @@ func (s *Subscriber) Error() error {
 	return s.err
 }
 
-// NewSubscriber starts watching the a directory for the event described in
+// NewSubscriber starts watching the directory for the event described in
 // event. The events are sent over the channel returned by the Queue function.
 //
 // When the stream shuts down, a message will be sent over the channel returned
@@ -77,7 +77,7 @@ func (s *Subscriber) Error() error {
 // the Queue.
 //
 // This function returns after the notifier has been set up and the watcher
-// goroutine has been successfully started. To wait until the strem has been
+// goroutine has been successfully started. To wait until the stream has been
 // shut down or there has been an error, block on the channel returned by the
 // Done function.
 //
@@ -128,7 +128,7 @@ func (s *Subscriber) watch(c chan notify.EventInfo) {
 // around a Subscriber. Events are passed to the callback function supplied by
 // cb.
 //
-// This function does not take responsbility for handling event processing
+// This function does not take responsibility for handling event processing
 // errors. The caller should ensure they are handling errors as normal by
 // waiting on the Done channel and processing any errors returned by the Error
 // function afterward.
